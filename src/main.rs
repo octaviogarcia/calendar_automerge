@@ -114,6 +114,49 @@ impl CalendarAutomergeApp {
 impl eframe::App for CalendarAutomergeApp {
   fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
     let app = self;
+    //Main window
+    egui::CentralPanel::default().show(ctx, |ui| {
+      let w_width  = ui.available_size().x;
+      let w_height = ui.available_size().y;
+      let vpadding = 10.0;
+      let column_size = 2.0*w_width/5.0 - vpadding;
+      ui.horizontal(|ui|{
+        ui.set_max_height(w_height);//Why do I have to do this
+        ui.vertical(|ui|{
+          ui.set_width(w_width - 2.0*column_size);
+          if ui.button("Add appointment").clicked(){
+            app.appointment_window_set_data(None);
+            app.appointment_window_data.open = true;
+          }
+          ui.heading("0.0.1 prealpha");
+        });
+        ui.separator();
+        ui.vertical(|ui|{
+          ui.set_width(column_size);
+          ui.label("Day/Week/Month viewer");
+        });
+        ui.separator();
+        ui.vertical(|ui|{
+          ui.vertical(|ui|{
+            ui.set_height(w_height/2.0);
+            ui.set_width(column_size);
+            egui::ScrollArea::vertical().show(ui,|ui|{
+              appointments_list_ui(ui,app);
+            });
+          });
+          ui.add(egui::Separator::default().spacing(1.0));
+          ui.add(egui::Separator::default().spacing(1.0));
+          ui.vertical(|ui|{
+            ui.set_height(w_height/2.0);
+            ui.set_width(column_size);
+            ui.heading("Tasks");
+            ui.separator();
+          });
+        });
+      });
+    });
+    
+    //Appointment window
     if app.appointment_window_data.open { 
       egui::Window::new(
         if app.appointment_window_data.editing.is_none() { "New Appointment" } else { "Editing Appointment" }
@@ -123,24 +166,6 @@ impl eframe::App for CalendarAutomergeApp {
         });
       });
     }
-    egui::CentralPanel::default().show(ctx, |ui| {
-      let height = ui.available_size().y;
-      ui.horizontal(|ui|{
-        ui.set_max_height(height);//Why do I have to do this
-        ui.vertical(|ui|{
-          if ui.button("Add appointment").clicked(){
-            app.appointment_window_set_data(None);
-            app.appointment_window_data.open = true;
-          }
-          ui.heading("0.0.1 prealpha");
-        });
-        ui.vertical(|ui|{
-          egui::ScrollArea::vertical().show(ui,|ui|{
-            appointments_list_ui(ui,app);
-          });
-        });
-      });
-   });
   }
 }
 
@@ -230,13 +255,14 @@ fn appointment_window_ui(ui: &mut egui::Ui,app: &mut CalendarAutomergeApp){
 
 fn appointments_list_ui(ui: &mut egui::Ui,app: &mut CalendarAutomergeApp){
   ui.heading("Appointments");
+  ui.separator();
   let mut for_deletion = Vec::<usize>::with_capacity(app.appointments.len());
   let mut edit_appointment: Option<usize> = None;
   for (idx,a) in app.appointments.iter_mut().enumerate(){
     let init_appointment = chrono::NaiveDateTime::from_timestamp(a.init,0);//@SPEED Save this to avoid recreating in each frame
     let end_appointment = chrono::NaiveDateTime::from_timestamp(a.end,0);
-    ui.horizontal(|ui|{
-      ui.heading(init_appointment.to_string()+" - "+&end_appointment.to_string());
+    ui.horizontal_wrapped(|ui|{
+      ui.add(egui::Label::new(init_appointment.to_string()+" - "+&end_appointment.to_string()).wrap(true));
       if ui.button("Edit").clicked(){
         edit_appointment = Some(idx);
       }
@@ -245,6 +271,7 @@ fn appointments_list_ui(ui: &mut egui::Ui,app: &mut CalendarAutomergeApp){
       }
     });
     ui.label(&a.text);
+    ui.separator();
   }
   if edit_appointment.is_some() {
     app.appointment_window_set_data(edit_appointment);
