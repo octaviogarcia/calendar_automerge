@@ -132,7 +132,7 @@ impl eframe::App for CalendarAutomergeApp {
         ui.set_max_height(w_height);//Why do I have to do this
         ui.vertical(|ui|{
           ui.set_width(w_width - 2.0*column_size);
-          if ui.button("Add appointment").clicked(){
+          if ui.button_enabled(!app.awd_open,"Add appointment").clicked(){
             app.appointment_window_set_data(None);
             app.awd_open = true;
           }
@@ -152,8 +152,8 @@ impl eframe::App for CalendarAutomergeApp {
               appointments_list_ui(ui,app);
             });
           });
-          ui.add(egui::Separator::default().spacing(1.0));
-          ui.add(egui::Separator::default().spacing(1.0));
+          ui.separator_spacing(0.5);
+          ui.separator_spacing(0.5);
           ui.vertical(|ui|{
             ui.set_height(w_height/2.0);
             ui.set_width(column_size);
@@ -195,7 +195,6 @@ impl eframe::App for CalendarAutomergeApp {
     }
   }
 }
-
 fn appointment_window_ui(ui: &mut egui::Ui,awd: &mut AppointmentWindowData) -> AppointmentWindowResult{
   awd.year  = ui_counter(ui,"Year",awd.year,0,i32::MAX-1,true);
   awd.month = ui_counter(ui,"Month",awd.month,1,12,true);
@@ -273,10 +272,10 @@ fn appointments_list_ui(ui: &mut egui::Ui,app: &mut CalendarAutomergeApp){
     let end_appointment = chrono::NaiveDateTime::from_timestamp(a.end,0);
     ui.horizontal_wrapped(|ui|{
       ui.add(egui::Label::new(init_appointment.to_string()+" - "+&end_appointment.to_string()).wrap(true));
-      if ui.button("Edit").clicked(){
+      if ui.button_enabled(!app.awd_open,"Edit").clicked(){
         edit_appointment = Some(idx);
       }
-      if ui.button("Delete").clicked(){
+      if ui.button_enabled(!app.awd_open,"Delete").clicked(){
         for_deletion.push(idx);
       }
     });
@@ -325,3 +324,17 @@ fn days_from_month(year: i32,month: u32) -> u32 {
   let firstday_nextmonth = chrono::Utc.ymd(year,month,1).and_hms_milli(0,0,0,0);
   return firstday_nextmonth.signed_duration_since(firstday).num_days().abs() as u32;//cast i32 to u32
 }
+
+trait CustomUiShortcuts {
+  fn button_enabled(&mut self,enabled: bool,text: impl Into<egui::WidgetText>) -> egui::Response;
+  fn separator_spacing(&mut self,spacing: f32) -> egui::Response;
+}
+impl CustomUiShortcuts for egui::Ui {
+  fn button_enabled(&mut self,enabled: bool,text: impl Into<egui::WidgetText>) -> egui::Response {
+    self.add_enabled(enabled,egui::Button::new(text))
+  }
+  fn separator_spacing(&mut self,spacing: f32) -> egui::Response {
+    self.add(egui::Separator::default().spacing(spacing))
+  }
+}
+
