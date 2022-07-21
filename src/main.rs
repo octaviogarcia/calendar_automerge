@@ -38,14 +38,15 @@ fn main() {
 
 #[derive(Default)]
 struct CalendarAutomergeApp {
-  pub appointment_window_data: AppointmentWindowData,
+  pub awd: AppointmentWindowData,
+  pub awd_open: bool,
+  pub awd_editing_idx: Option<usize>,//Index to appointments
   //Main window appointments
   pub appointments: Vec<Appointment>,
 }
+
 #[derive(Default)]
 struct AppointmentWindowData {
-  pub open: bool,
-  pub editing: Option<usize>,
   pub month: u32,
   pub year: i32,
   pub selected_y: i32,
@@ -55,9 +56,15 @@ struct AppointmentWindowData {
   pub minute: u32,
   pub d_hour: u32,
   pub d_minute: u32,
-  pub new_text: String,
+  pub text: String,
+}
+enum AppointmentWindowResult {
+  Open,
+  Closed,
+  Saved(Appointment),
 }
 
+#[derive(Default,Clone)]
 struct Appointment {
   pub init: i64,//Timestamp
   pub end: i64,//Timestamp
@@ -72,10 +79,12 @@ impl CalendarAutomergeApp {
     // for e.g. egui::PaintCallback.
     let mut app = Self::default();
     app.appointment_window_set_data(None);
-    app.appointment_window_data.open = false;
+    app.awd_open = false;
     return app;
   }
   fn appointment_window_set_data(&mut self,a_idx: Option<usize>){
+    self.awd_editing_idx = a_idx;
+    
     let init: i64;
     let end: i64;
     let text: String;
@@ -94,13 +103,12 @@ impl CalendarAutomergeApp {
     }
   
     let date = chrono::NaiveDateTime::from_timestamp(init,0);
-    let awd = &mut self.appointment_window_data;//alias
-    awd.editing  = a_idx;
-    awd.new_text = text;
-    awd.month    = date.month();
-    awd.year     = date.year();
-    awd.hour     = date.hour();
-    awd.minute   = date.minute();
+    let awd = &mut self.awd;//alias
+    awd.text   = text;
+    awd.month  = date.month();
+    awd.year   = date.year();
+    awd.hour   = date.hour();
+    awd.minute = date.minute();
     let diff = (end - init).abs();
     awd.d_minute   = (diff/60) as u32;
     awd.d_hour     = awd.d_minute/60;
@@ -126,7 +134,7 @@ impl eframe::App for CalendarAutomergeApp {
           ui.set_width(w_width - 2.0*column_size);
           if ui.button("Add appointment").clicked(){
             app.appointment_window_set_data(None);
-            app.appointment_window_data.open = true;
+            app.awd_open = true;
           }
           ui.heading("0.0.1 prealpha");
         });
@@ -157,20 +165,38 @@ impl eframe::App for CalendarAutomergeApp {
     });
     
     //Appointment window
-    if app.appointment_window_data.open { 
-      egui::Window::new(
-        if app.appointment_window_data.editing.is_none() { "New Appointment" } else { "Editing Appointment" }
-      ).show(ctx,|ui| {
+    if app.awd_open { 
+      let window_title = if app.awd_editing_idx.is_none() { "New Appointment" } else { "Editing Appointment" };
+      egui::Window::new(window_title).show(ctx,|ui| {
         ui.vertical(|ui|{
-          appointment_window_ui(ui,app);
+          let result = appointment_window_ui(ui,&mut app.awd);
+          match result {
+            AppointmentWindowResult::Open => {},
+            AppointmentWindowResult::Closed => {
+              app.awd_editing_idx = None;
+              app.awd_open        = false;
+            },
+            AppointmentWindowResult::Saved(appointment) => {
+              match app.awd_editing_idx {
+                None => {
+                  app.appointments.push(appointment);
+                }
+                Some(idx) => {
+                  app.appointments[idx] = appointment
+                }
+              }
+              app.appointments.sort_by(|a,b| a.init.partial_cmp(&b.init).unwrap());
+              app.awd_editing_idx = None;
+              app.awd_open        = false;
+            },
+          }
         });
       });
     }
   }
 }
 
-fn appointment_window_ui(ui: &mut egui::Ui,app: &mut CalendarAutomergeApp){
-  let awd = &mut app.appointment_window_data;//alias
+fn appointment_window_ui(ui: &mut egui::Ui,awd: &mut AppointmentWindowData) -> AppointmentWindowResult{
   awd.year  = ui_counter(ui,"Year",awd.year,0,i32::MAX-1,true);
   awd.month = ui_counter(ui,"Month",awd.month,1,12,true);
   ui.heading(format!("Selected {:0>4}-{:0>2}-{:0>2}",
@@ -211,46 +237,30 @@ fn appointment_window_ui(ui: &mut egui::Ui,app: &mut CalendarAutomergeApp){
     awd.d_hour   = ui_counter(ui,"h:",awd.d_hour,0,23,true);
     awd.d_minute = ui_counter(ui,"m:",awd.d_minute,0,59,true);
   });
+  
+  let mut result = AppointmentWindowResult::Open;
+  
   ui.horizontal(|ui|{
-    match awd.editing {
-      None => {
-        if ui.button("Add").clicked(){
-          let init = chrono::Utc.ymd(
-            awd.selected_y,
-            awd.selected_m,
-            awd.selected_d
-          ).and_hms_milli(awd.hour,awd.minute,0,0).timestamp();
-          let end  = init + ((awd.d_minute + awd.d_hour * 60) * 60) as i64;
-          //@Slow, if we keep the vec sorted from the start we can push and swap() to the correct position unless its equal to another value
-          app.appointments.push(Appointment{init: init,end: end,text: String::from(awd.new_text.as_str())});
-          app.appointments.sort_by(|a,b| a.init.partial_cmp(&b.init).unwrap());
-          awd.open = false;
-        }
-      }
-      Some(idx) => {
-        if ui.button("Save").clicked(){
-          let init = chrono::Utc.ymd(
-            awd.selected_y,
-            awd.selected_m,
-            awd.selected_d
-          ).and_hms_milli(awd.hour,awd.minute,0,0).timestamp();
-          let end  = init + ((awd.d_minute + awd.d_hour * 60) * 60) as i64;
-          app.appointments[idx].init = init;
-          app.appointments[idx].end  = end;
-          app.appointments[idx].text = String::from(awd.new_text.as_str());
-          app.appointments.sort_by(|a,b| a.init.partial_cmp(&b.init).unwrap());
-          awd.editing = None;
-          awd.open = false;
-        }
-      }
+    if ui.button("Save").clicked(){
+      let init = chrono::Utc.ymd(
+        awd.selected_y,
+        awd.selected_m,
+        awd.selected_d
+      ).and_hms_milli(awd.hour,awd.minute,0,0).timestamp();
+      let end  = init + ((awd.d_minute + awd.d_hour * 60) * 60) as i64;
+      let text = String::from(awd.text.as_str()); 
+      result = AppointmentWindowResult::Saved(Appointment{init: init,end: end,text: text});
     }
     if ui.button("Close").clicked() {
-      awd.open = false;
+      result = AppointmentWindowResult::Closed
     }
   });
+  
   let mut note_size = ui.available_size();
-  note_size.y = 200.;
-  ui.add_sized(note_size,egui::TextEdit::multiline(&mut awd.new_text));
+  note_size.y = 200.;//Pixels, make this font size dependent?
+  ui.add_sized(note_size,egui::TextEdit::multiline(&mut awd.text));
+  
+  return result;
 }
 
 fn appointments_list_ui(ui: &mut egui::Ui,app: &mut CalendarAutomergeApp){
@@ -275,7 +285,7 @@ fn appointments_list_ui(ui: &mut egui::Ui,app: &mut CalendarAutomergeApp){
   }
   if edit_appointment.is_some() {
     app.appointment_window_set_data(edit_appointment);
-    app.appointment_window_data.open = true;
+    app.awd_open = true;
   }
   for idx in for_deletion.iter().rev(){//@SLOW Delete by reverse to mitigate O(n) remove
     app.appointments.remove(*idx);
