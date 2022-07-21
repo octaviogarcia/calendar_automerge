@@ -43,6 +43,8 @@ struct CalendarAutomergeApp {
   pub awd_editing_idx: Option<usize>,//Index to appointments
   //Main window appointments
   pub appointments: Vec<Appointment>,
+  pub tasks: Vec<Task>,
+  pub done_tasks: Vec<Task>,
 }
 
 #[derive(Default)]
@@ -57,18 +59,36 @@ struct AppointmentWindowData {
   pub d_hour: u32,
   pub d_minute: u32,
   pub text: String,
+  //These are task specific fields
+  pub force_regularity: bool,//if we force everything to regular, disable years and force months to be 30 days
+  pub is_task: bool,
+  pub repeat_y:  i64,
+  pub repeat_mo: i64,
+  pub repeat_w:  i64,
+  pub repeat_d:  i64,
+  pub repeat_h:  i64,
+  pub repeat_mi: i64,
+  pub repeat_s:  i64,
 }
+
 enum AppointmentWindowResult {
   Open,
   Closed,
-  Saved(Appointment),
+  SavedAppointment(Appointment),
+  SavedTask(Task),
 }
 
-#[derive(Default,Clone)]
+#[derive(Default)]
 struct Appointment {
   pub init: i64,//Timestamp
   pub end: i64,//Timestamp
   pub text: String,
+}
+
+#[derive(Default)]
+struct Task {
+  pub task: Appointment,//A task is conceptually the same except we repeat it
+  pub repeat_period: RepeatPeriod,
 }
 
 impl CalendarAutomergeApp {
@@ -77,28 +97,36 @@ impl CalendarAutomergeApp {
     // Restore app state using cc.storage (requires the "persistence" feature).
     // Use the cc.gl (a glow::Context) to create graphics shaders and buffers that you can use
     // for e.g. egui::PaintCallback.
-    let mut app = Self::default();
-    app.appointment_window_set_data(None);
-    app.awd_open = false;
-    return app;
+    return Self::default();
   }
-  fn appointment_window_set_data(&mut self,a_idx: Option<usize>){
+  fn appointment_window_set_data(&mut self,a_idx: Option<usize>,is_task: bool){
     self.awd_editing_idx = a_idx;
     
     let init: i64;
     let end: i64;
     let text: String;
+    let repeat_period: RepeatPeriod;
     
     match a_idx {
       None => {
         init  = Local::now().timestamp();
         end   = init + 1*60*60;
         text  = String::new();
+        repeat_period = RepeatPeriod::default();
       }
       Some(idx) => {
-        init  = self.appointments[idx].init;
-        end   = self.appointments[idx].end;
-        text  = String::from(self.appointments[idx].text.as_str());
+        if is_task {
+          init  = self.tasks[idx].task.init;
+          end   = self.tasks[idx].task.end;
+          text  = String::from(self.tasks[idx].task.text.as_str());
+          repeat_period = self.tasks[idx].repeat_period;
+        }
+        else{
+          init  = self.appointments[idx].init;
+          end   = self.appointments[idx].end;
+          text  = String::from(self.appointments[idx].text.as_str());
+          repeat_period = RepeatPeriod::default();
+        }
       }
     }
   
@@ -116,6 +144,27 @@ impl CalendarAutomergeApp {
     awd.selected_y = awd.year;
     awd.selected_m = awd.month;
     awd.selected_d = date.day();
+    
+    awd.is_task = is_task;
+    awd.repeat_s  = repeat_period.regular.seconds;
+    awd.repeat_mi = awd.repeat_s/60;
+    awd.repeat_h  = awd.repeat_mi/60;
+    awd.repeat_d  = awd.repeat_h/24;
+    awd.repeat_w  = awd.repeat_d/7;
+    awd.repeat_d  %=7;
+    awd.repeat_h  %=24;
+    awd.repeat_mi %=60;
+    awd.repeat_s  %=60;
+    
+    awd.repeat_mo = repeat_period.irregular.months;
+    awd.repeat_y  = repeat_period.irregular.months/12;
+    awd.repeat_mo %= 12;
+    
+    awd.force_regularity = awd.repeat_mo == 0 && awd.repeat_y == 0 && awd.repeat_w > 3;
+    if awd.force_regularity {
+      awd.repeat_mo = awd.repeat_w/4;
+      awd.repeat_w %= 4;
+    }
   }
 }
 
@@ -133,7 +182,11 @@ impl eframe::App for CalendarAutomergeApp {
         ui.vertical(|ui|{
           ui.set_width(w_width - 2.0*column_size);
           if ui.button_enabled(!app.awd_open,"Add appointment").clicked(){
-            app.appointment_window_set_data(None);
+            app.appointment_window_set_data(None,false);
+            app.awd_open = true;
+          }
+          if ui.button_enabled(!app.awd_open,"Add task").clicked(){
+            app.appointment_window_set_data(None,true);
             app.awd_open = true;
           }
           ui.heading("0.0.1 prealpha");
@@ -148,7 +201,7 @@ impl eframe::App for CalendarAutomergeApp {
           ui.vertical(|ui|{
             ui.set_height(w_height/2.0);
             ui.set_width(column_size);
-            egui::ScrollArea::vertical().show(ui,|ui|{
+            egui::ScrollArea::vertical().id_source("Appointments").show(ui,|ui|{
               appointments_list_ui(ui,app);
             });
           });
@@ -157,26 +210,26 @@ impl eframe::App for CalendarAutomergeApp {
           ui.vertical(|ui|{
             ui.set_height(w_height/2.0);
             ui.set_width(column_size);
-            ui.heading("Tasks");
-            ui.separator();
+            egui::ScrollArea::vertical().id_source("Tasks").show(ui,|ui|{
+              tasks_list_ui(ui,app);
+            });
           });
         });
       });
     });
     
-    //Appointment window
+    //Appointment/Task window
     if app.awd_open { 
-      let window_title = if app.awd_editing_idx.is_none() { "New Appointment" } else { "Editing Appointment" };
+      let window_title = if app.awd_editing_idx.is_none() { "New Appointment/Task" } else { "Editing Appointment/Task" };
       egui::Window::new(window_title).show(ctx,|ui| {
         ui.vertical(|ui|{
           let result = appointment_window_ui(ui,&mut app.awd);
           match result {
             AppointmentWindowResult::Open => {},
             AppointmentWindowResult::Closed => {
-              app.awd_editing_idx = None;
               app.awd_open        = false;
             },
-            AppointmentWindowResult::Saved(appointment) => {
+            AppointmentWindowResult::SavedAppointment(appointment) => {
               match app.awd_editing_idx {
                 None => {
                   app.appointments.push(appointment);
@@ -186,7 +239,18 @@ impl eframe::App for CalendarAutomergeApp {
                 }
               }
               app.appointments.sort_by(|a,b| a.init.partial_cmp(&b.init).unwrap());
-              app.awd_editing_idx = None;
+              app.awd_open        = false;
+            },
+            AppointmentWindowResult::SavedTask(task) => {
+              match app.awd_editing_idx {
+                None => {
+                  app.tasks.push(task);
+                }
+                Some(idx) => {
+                  app.tasks[idx] = task;
+                }
+              }
+              app.tasks.sort_by(|a,b| a.task.init.partial_cmp(&b.task.init).unwrap());
               app.awd_open        = false;
             },
           }
@@ -237,8 +301,30 @@ fn appointment_window_ui(ui: &mut egui::Ui,awd: &mut AppointmentWindowData) -> A
     awd.d_minute = ui_counter(ui,"m:",awd.d_minute,0,59,true);
   });
   
-  let mut result = AppointmentWindowResult::Open;
+  if awd.is_task{
+    ui.heading("Repeat");
+    ui.checkbox(&mut awd.force_regularity,"Regularize (1 month = 30 days, disable years)");
+    ui.horizontal(|ui|{
+      if !awd.force_regularity{
+        awd.repeat_y  = ui_counter(ui,"Years:",awd.repeat_y ,0,9999,true);
+      }
+      let max_months = 23*(!awd.force_regularity as i64)+99999*(awd.force_regularity as i64);
+      awd.repeat_mo = ui_counter(ui,"Months:",awd.repeat_mo,0,max_months,true);
+    });
+    ui.horizontal(|ui|{
+      awd.repeat_w  = ui_counter(ui,"Weeks:",awd.repeat_w ,0,3,true);
+      awd.repeat_d  = ui_counter(ui,"Days:",awd.repeat_d ,0,6,true);
+      awd.repeat_h  = ui_counter(ui,"Hours:",awd.repeat_h,0,23,true);
+      awd.repeat_mi = ui_counter(ui,"Minutes:",awd.repeat_mi,0,59,true);
+      awd.repeat_s  = ui_counter(ui,"Seconds:",awd.repeat_s ,0,59,true);
+    });
+  }
   
+  let mut note_size = ui.available_size();
+  note_size.y = 200.;//Pixels, make this font size dependent?
+  ui.add_sized(note_size,egui::TextEdit::multiline(&mut awd.text));
+  
+  let mut result = AppointmentWindowResult::Open;
   ui.horizontal(|ui|{
     if ui.button("Save").clicked(){
       let init = chrono::Utc.ymd(
@@ -248,16 +334,19 @@ fn appointment_window_ui(ui: &mut egui::Ui,awd: &mut AppointmentWindowData) -> A
       ).and_hms_milli(awd.hour,awd.minute,0,0).timestamp();
       let end  = init + ((awd.d_minute + awd.d_hour * 60) * 60) as i64;
       let text = String::from(awd.text.as_str()); 
-      result = AppointmentWindowResult::Saved(Appointment{init: init,end: end,text: text});
+      let appointment = Appointment{init: init,end: end,text: text};
+      result = if awd.is_task {
+        let repeat_period = RepeatPeriod::new(awd.repeat_y,awd.repeat_mo,awd.repeat_w,awd.repeat_d,awd.repeat_h,awd.repeat_mi,awd.repeat_s);
+        AppointmentWindowResult::SavedTask(Task{task: appointment,repeat_period: repeat_period})
+      }
+      else{
+        AppointmentWindowResult::SavedAppointment(appointment)
+      };
     }
     if ui.button("Close").clicked() {
-      result = AppointmentWindowResult::Closed
+      result = AppointmentWindowResult::Closed;
     }
   });
-  
-  let mut note_size = ui.available_size();
-  note_size.y = 200.;//Pixels, make this font size dependent?
-  ui.add_sized(note_size,egui::TextEdit::multiline(&mut awd.text));
   
   return result;
 }
@@ -283,11 +372,40 @@ fn appointments_list_ui(ui: &mut egui::Ui,app: &mut CalendarAutomergeApp){
     ui.separator();
   }
   if edit_appointment.is_some() {
-    app.appointment_window_set_data(edit_appointment);
+    app.appointment_window_set_data(edit_appointment,false);
     app.awd_open = true;
   }
   for idx in for_deletion.iter().rev(){//@SLOW Delete by reverse to mitigate O(n) remove
     app.appointments.remove(*idx);
+  }
+}
+
+fn tasks_list_ui(ui: &mut egui::Ui,app: &mut CalendarAutomergeApp){
+  ui.heading("Tasks");
+  ui.separator();
+  let mut for_deletion = Vec::<usize>::with_capacity(app.tasks.len());
+  let mut edit_task: Option<usize> = None;
+  for (idx,t) in app.tasks.iter_mut().enumerate(){
+    let init = chrono::NaiveDateTime::from_timestamp(t.task.init.max(i32::MIN as i64).min(i32::MAX as i64),0);//@SPEED Save this to avoid recreating in each frame
+    let end  = chrono::NaiveDateTime::from_timestamp(t.task.end.max(i32::MIN as i64).min(i32::MAX as i64),0);
+    ui.horizontal_wrapped(|ui|{
+      ui.add(egui::Label::new(init.to_string()+" - "+&end.to_string()+" - "+&t.repeat_period.to_string()).wrap(true));
+      if ui.button_enabled(false,"Edit").clicked(){
+        edit_task = Some(idx);
+      }
+      if ui.button_enabled(false,"Delete").clicked(){
+        for_deletion.push(idx);
+      }
+    });
+    ui.label(&t.task.text);
+    ui.separator();
+  }
+  if edit_task.is_some() {
+    app.appointment_window_set_data(edit_task,true);
+    app.awd_open = true;
+  }
+  for idx in for_deletion.iter().rev(){//@SLOW Delete by reverse to mitigate O(n) remove
+    app.tasks.remove(*idx);
   }
 }
 
@@ -338,3 +456,60 @@ impl CustomUiShortcuts for egui::Ui {
   }
 }
 
+#[derive(Default,Copy,Clone)]
+struct RepeatPeriod{
+  //These 2 "add up" to make a full repaet period, i.e. 1 years, 3 months, 4 weeks. Can be expresed as months + seconds
+  pub regular: RegularRepeatPeriod,
+  pub irregular: IrregularRepeatPeriod,
+}
+#[derive(Default,Copy,Clone)]
+struct RegularRepeatPeriod{
+  seconds: i64,
+}
+#[derive(Default,Copy,Clone)]
+struct IrregularRepeatPeriod{
+  months: i64,
+}
+impl ToString for RegularRepeatPeriod {
+  fn to_string(&self) -> String {
+    let mut m = self.seconds/60;
+    let mut h = m/60;
+    let mut d = h/24;
+    let w = d/7;
+    let s = self.seconds % 60;
+    d %= 7;
+    h %= 24;
+    m %= 60;
+    return format!("{} weeks {} days {} hours {} minutes {} seconds",w,d,h,m,s);
+  }
+}
+impl ToString for IrregularRepeatPeriod {
+  fn to_string(&self) -> String {
+    let y = self.months/12;
+    let m = self.months % 12;
+    return format!("{} years {} months",y,m);
+  }
+}
+impl ToString for RepeatPeriod{
+  fn to_string(&self) -> String {
+    return format!("{} {}",self.irregular.to_string(),self.regular.to_string());
+  }
+}
+impl RegularRepeatPeriod{
+  #[allow(dead_code)]
+  pub fn new(w: i64,d: i64,h: i64,m: i64,s: i64) -> Self {
+    Self{seconds: (((w*7 + d)*24 + h)*60 + m)*60 + s}
+  }
+}
+impl IrregularRepeatPeriod {
+  #[allow(dead_code)]
+  pub fn new(y: i64,m: i64) -> Self {
+    Self{months: 12*y+m}
+  }
+}
+impl RepeatPeriod {
+  #[allow(dead_code)]
+  pub fn new(y: i64,mo: i64,w: i64,d: i64,h: i64,mi: i64,s: i64) -> Self {
+    Self{irregular: IrregularRepeatPeriod::new(y,mo),regular: RegularRepeatPeriod::new(w,d,h,mi,s)}
+  }
+}
