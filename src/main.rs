@@ -163,7 +163,9 @@ impl CalendarAutomergeApp {
     awd.force_regularity = awd.repeat_mo == 0 && awd.repeat_y == 0 && awd.repeat_w > 3;
     if awd.force_regularity {
       awd.repeat_mo = awd.repeat_w/4;
-      awd.repeat_w %= 4;
+      awd.repeat_y  = awd.repeat_mo/12;
+      awd.repeat_w  %= 4;
+      awd.repeat_mo %= 12;
     }
   }
 }
@@ -303,13 +305,10 @@ fn appointment_window_ui(ui: &mut egui::Ui,awd: &mut AppointmentWindowData) -> A
   
   if awd.is_task{
     ui.heading("Repeat");
-    ui.checkbox(&mut awd.force_regularity,"Regularize (1 month = 30 days, disable years)");
+    ui.checkbox(&mut awd.force_regularity,"Normalized (1 year = 365 days, 1 month = 30 days)");
     ui.horizontal(|ui|{
-      if !awd.force_regularity{
-        awd.repeat_y  = ui_counter(ui,"Years:",awd.repeat_y ,0,9999,true);
-      }
-      let max_months = 23*(!awd.force_regularity as i64)+99999*(awd.force_regularity as i64);
-      awd.repeat_mo = ui_counter(ui,"Months:",awd.repeat_mo,0,max_months,true);
+      awd.repeat_y  = ui_counter(ui,"Years:",awd.repeat_y ,0,10,true);
+      awd.repeat_mo = ui_counter(ui,"Months:",awd.repeat_mo,0,12,true);
     });
     ui.horizontal(|ui|{
       awd.repeat_w  = ui_counter(ui,"Weeks:",awd.repeat_w ,0,3,true);
@@ -336,7 +335,7 @@ fn appointment_window_ui(ui: &mut egui::Ui,awd: &mut AppointmentWindowData) -> A
       let text = String::from(awd.text.as_str()); 
       let appointment = Appointment{init: init,end: end,text: text};
       result = if awd.is_task {
-        let repeat_period = RepeatPeriod::new(awd.repeat_y,awd.repeat_mo,awd.repeat_w,awd.repeat_d,awd.repeat_h,awd.repeat_mi,awd.repeat_s);
+        let repeat_period = RepeatPeriod::new(awd.force_regularity,awd.repeat_y,awd.repeat_mo,awd.repeat_w,awd.repeat_d,awd.repeat_h,awd.repeat_mi,awd.repeat_s);
         AppointmentWindowResult::SavedTask(Task{task: appointment,repeat_period: repeat_period})
       }
       else{
@@ -509,7 +508,10 @@ impl IrregularRepeatPeriod {
 }
 impl RepeatPeriod {
   #[allow(dead_code)]
-  pub fn new(y: i64,mo: i64,w: i64,d: i64,h: i64,mi: i64,s: i64) -> Self {
+  pub fn new(force_regular: bool,y: i64,mo: i64,w: i64,d: i64,h: i64,mi: i64,s: i64) -> Self {
+    let d  = if force_regular { d+mo*30+y*364 } else { d  };
+    let y  = if force_regular {       0       } else { y  };
+    let mo = if force_regular {       0       } else { mo };
     Self{irregular: IrregularRepeatPeriod::new(y,mo),regular: RegularRepeatPeriod::new(w,d,h,mi,s)}
   }
 }
