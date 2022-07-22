@@ -60,7 +60,6 @@ struct AppointmentWindowData {
   pub d_minute: u32,
   pub text: String,
   //These are task specific fields
-  pub force_regularity: bool,//if we force everything to regular, disable years and force months to be 30 days
   pub is_task: bool,
   pub repeat_y:  i64,
   pub repeat_mo: i64,
@@ -146,27 +145,10 @@ impl CalendarAutomergeApp {
     awd.selected_d = date.day();
     
     awd.is_task = is_task;
-    awd.repeat_s  = repeat_period.regular.seconds;
-    awd.repeat_mi = awd.repeat_s/60;
-    awd.repeat_h  = awd.repeat_mi/60;
-    awd.repeat_d  = awd.repeat_h/24;
-    awd.repeat_w  = awd.repeat_d/7;
-    awd.repeat_d  %=7;
-    awd.repeat_h  %=24;
-    awd.repeat_mi %=60;
-    awd.repeat_s  %=60;
-    
-    awd.repeat_mo = repeat_period.irregular.months;
-    awd.repeat_y  = repeat_period.irregular.months/12;
-    awd.repeat_mo %= 12;
-    
-    awd.force_regularity = awd.repeat_mo == 0 && awd.repeat_y == 0 && awd.repeat_w > 3;
-    if awd.force_regularity {
-      awd.repeat_mo = awd.repeat_w/4;
-      awd.repeat_y  = awd.repeat_mo/12;
-      awd.repeat_w  %= 4;
-      awd.repeat_mo %= 12;
-    }
+    (
+      awd.repeat_y,awd.repeat_mo,
+      awd.repeat_w,awd.repeat_d,awd.repeat_h,awd.repeat_mi,awd.repeat_s
+    ) = repeat_period.spread();
   }
 }
 
@@ -196,7 +178,30 @@ impl eframe::App for CalendarAutomergeApp {
         ui.separator();
         ui.vertical(|ui|{
           ui.set_width(column_size);
-          ui.label("Day/Week/Month viewer");
+          let days = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+          ui.columns(days.len(),|columns|{
+            for (didx,d) in days.iter().enumerate(){
+              columns[didx].horizontal(|ui|{
+                if didx != 0 { ui.separator_spacing(0.1); }
+                ui.vertical(|ui|{
+                  let v = ui.visuals_mut();
+                  //@TODO none of this shit works?
+                  v.faint_bg_color                 = egui::Color32::RED;
+                  v.extreme_bg_color               = egui::Color32::RED;
+                  v.code_bg_color                  = egui::Color32::RED;
+                  v.widgets.noninteractive.bg_fill = egui::Color32::RED;
+                  v.widgets.inactive.bg_fill       = egui::Color32::RED;
+                  ui.label(*d);
+                  let minutes = ["00","30"];
+                  for h in 0..24{ 
+                    for m in minutes {
+                      ui.label(format!("{}:{}",h.to_string(),m));
+                    }
+                  }
+                });
+              });
+            }
+          });
         });
         ui.separator();
         ui.vertical(|ui|{
@@ -305,17 +310,16 @@ fn appointment_window_ui(ui: &mut egui::Ui,awd: &mut AppointmentWindowData) -> A
   
   if awd.is_task{
     ui.heading("Repeat");
-    ui.checkbox(&mut awd.force_regularity,"Normalized (1 year = 365 days, 1 month = 30 days)");
     ui.horizontal(|ui|{
-      awd.repeat_y  = ui_counter(ui,"Years:",awd.repeat_y ,0,10,true);
+      awd.repeat_y  = ui_counter(ui,"Years:",awd.repeat_y,0,10,true);
       awd.repeat_mo = ui_counter(ui,"Months:",awd.repeat_mo,0,12,true);
     });
     ui.horizontal(|ui|{
-      awd.repeat_w  = ui_counter(ui,"Weeks:",awd.repeat_w ,0,3,true);
-      awd.repeat_d  = ui_counter(ui,"Days:",awd.repeat_d ,0,6,true);
+      awd.repeat_w  = ui_counter(ui,"Weeks:",awd.repeat_w,0,500,true);
+      awd.repeat_d  = ui_counter(ui,"Days:",awd.repeat_d,0,6,true);
       awd.repeat_h  = ui_counter(ui,"Hours:",awd.repeat_h,0,23,true);
       awd.repeat_mi = ui_counter(ui,"Minutes:",awd.repeat_mi,0,59,true);
-      awd.repeat_s  = ui_counter(ui,"Seconds:",awd.repeat_s ,0,59,true);
+      awd.repeat_s  = ui_counter(ui,"Seconds:",awd.repeat_s,0,59,true);
     });
   }
   
@@ -335,7 +339,11 @@ fn appointment_window_ui(ui: &mut egui::Ui,awd: &mut AppointmentWindowData) -> A
       let text = String::from(awd.text.as_str()); 
       let appointment = Appointment{init: init,end: end,text: text};
       result = if awd.is_task {
-        let repeat_period = RepeatPeriod::new(awd.force_regularity,awd.repeat_y,awd.repeat_mo,awd.repeat_w,awd.repeat_d,awd.repeat_h,awd.repeat_mi,awd.repeat_s);
+        let repeat_period = RepeatPeriod::new(
+          awd.repeat_y,awd.repeat_mo,
+          awd.repeat_w,awd.repeat_d,
+          awd.repeat_h,awd.repeat_mi,awd.repeat_s
+        );
         AppointmentWindowResult::SavedTask(Task{task: appointment,repeat_period: repeat_period})
       }
       else{
@@ -389,10 +397,10 @@ fn tasks_list_ui(ui: &mut egui::Ui,app: &mut CalendarAutomergeApp){
     let end  = chrono::NaiveDateTime::from_timestamp(t.task.end.max(i32::MIN as i64).min(i32::MAX as i64),0);
     ui.horizontal_wrapped(|ui|{
       ui.add(egui::Label::new(init.to_string()+" - "+&end.to_string()+" - "+&t.repeat_period.to_string()).wrap(true));
-      if ui.button_enabled(false,"Edit").clicked(){
+      if ui.button_enabled(!app.awd_open,"Edit").clicked(){
         edit_task = Some(idx);
       }
-      if ui.button_enabled(false,"Delete").clicked(){
+      if ui.button_enabled(!app.awd_open,"Delete").clicked(){
         for_deletion.push(idx);
       }
     });
@@ -508,10 +516,21 @@ impl IrregularRepeatPeriod {
 }
 impl RepeatPeriod {
   #[allow(dead_code)]
-  pub fn new(force_regular: bool,y: i64,mo: i64,w: i64,d: i64,h: i64,mi: i64,s: i64) -> Self {
-    let d  = if force_regular { d+mo*30+y*364 } else { d  };
-    let y  = if force_regular {       0       } else { y  };
-    let mo = if force_regular {       0       } else { mo };
+  pub fn new(y: i64,mo: i64,w: i64,d: i64,h: i64,mi: i64,s: i64) -> Self {
     Self{irregular: IrregularRepeatPeriod::new(y,mo),regular: RegularRepeatPeriod::new(w,d,h,mi,s)}
+  }
+  pub fn spread(&self) -> (i64,i64,i64,i64,i64,i64,i64) {
+    let seconds = self.regular.seconds;
+    let months  = self.irregular.months;
+    let mi = seconds / 60;
+    let s  = seconds % 60;
+    let h  = mi / 60;
+    let mi = mi % 60;
+    let d  = h / 24;
+    let h  = h % 24;
+    let w  = d / 7;
+    let mo = months % 12;
+    let y  = months / 12;
+    return (y,mo,w,d,h,mi,s);
   }
 }
