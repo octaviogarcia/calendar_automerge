@@ -41,7 +41,8 @@ struct CalendarAutomergeApp {
   pub awd: AppointmentWindowData,
   pub awd_open: bool,
   pub awd_editing_idx: Option<usize>,//Index to appointments
-  //Main window appointments
+  pub selected_main_init: Option<i64>,
+  pub selected_main_end: Option<i64>,
   pub appointments: Vec<Appointment>,
   pub tasks: Vec<Task>,
   pub done_tasks: Vec<Task>,
@@ -159,11 +160,10 @@ impl eframe::App for CalendarAutomergeApp {
     egui::CentralPanel::default().show(ctx, |ui| {
       let w_width  = ui.available_size().x;
       let w_height = ui.available_size().y;
-      let column_size = 3.0*w_width/7.0;
       ui.horizontal(|ui|{
         ui.set_max_height(w_height);//Why do I have to do this
         ui.vertical(|ui|{
-          ui.set_width(w_width - 2.0*column_size);
+          ui.set_width(w_width*0.10);
           if ui.button_enabled(!app.awd_open,"Add appointment").clicked(){
             app.appointment_window_set_data(None,false);
             app.awd_open = true;
@@ -172,12 +172,16 @@ impl eframe::App for CalendarAutomergeApp {
             app.appointment_window_set_data(None,true);
             app.awd_open = true;
           }
+          if ui.button("Clear select").clicked(){
+            app.selected_main_init = None;
+            app.selected_main_end  = None;
+          }
           ui.heading("0.0.1 prealpha");
         });
         ui.separator();
         ui.vertical(|ui|{
           ui.set_height(w_height);
-          ui.set_width(column_size);
+          ui.set_width(w_width*0.60);
           egui::ScrollArea::vertical().id_source("Main viewer").show(ui,|ui|{
             main_viewer_ui(ui,app);
           });
@@ -185,8 +189,8 @@ impl eframe::App for CalendarAutomergeApp {
         ui.separator();
         ui.vertical(|ui|{
           ui.vertical(|ui|{
-            ui.set_height(w_height/2.0);
-            ui.set_width(column_size);
+            ui.set_height(w_height*0.45);
+            ui.set_width(w_width*0.30);
             egui::ScrollArea::vertical().id_source("Appointments").show(ui,|ui|{
               appointments_list_ui(ui,app);
             });
@@ -194,8 +198,8 @@ impl eframe::App for CalendarAutomergeApp {
           ui.separator_spacing(0.5);
           ui.separator_spacing(0.5);
           ui.vertical(|ui|{
-            ui.set_height(w_height/2.0);
-            ui.set_width(column_size);
+            ui.set_height(w_height*0.45);
+            ui.set_width(w_width*0.30);
             egui::ScrollArea::vertical().id_source("Tasks").show(ui,|ui|{
               tasks_list_ui(ui,app);
             });
@@ -367,7 +371,7 @@ fn appointments_list_ui(ui: &mut egui::Ui,app: &mut CalendarAutomergeApp){
   }
 }
 
-fn main_viewer_ui(ui: &mut egui::Ui,_app: &mut CalendarAutomergeApp){
+fn main_viewer_ui(ui: &mut egui::Ui,app: &mut CalendarAutomergeApp){
   let days = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
   let viewer_width = ui.max_rect().size().x;
   let today = chrono::Local::now();
@@ -375,37 +379,73 @@ fn main_viewer_ui(ui: &mut egui::Ui,_app: &mut CalendarAutomergeApp){
   let curr_hhmm = today.time().signed_duration_since(chrono::NaiveTime::from_hms(0,0,0));
   let curr_hh = curr_hhmm.num_hours();
   let curr_mm = curr_hhmm.num_minutes() % 60;
+  /*app.selected_main_init = None;
+  app.selected_main_end  = None;*/
   egui::Grid::new("mainviewer").striped(true).min_col_width(viewer_width/(days.len() as f32)).show(ui,|ui|{
-    for d in days {
-      ui.add_full_width_height(|ui|{ ui.add(egui::Label::new(egui::RichText::new(d).underline()).wrap(true)) });
+    for (didx,d) in days.iter().enumerate() {
+      let dfull = today + chrono::Duration::days(didx as i64-curr_day as i64);
+      let dstr = format!("{} ({:0>2}/{:0>2})",d,dfull.day().to_string(),dfull.month().to_string());
+      ui.add_full_width_height(|ui|{ 
+        if ui.add(egui::Button::new(egui::RichText::new(dstr).underline()).wrap(false)).clicked(){
+          app.selected_main_init = Some(dfull.date().and_hms(0,0,0).timestamp());
+          app.selected_main_end  = Some(dfull.date().and_hms(23,59,59).timestamp());
+        }
+      });
     }
-    ui.end_row();
-    //@SPEED: instead of formatting a string on each frame, we can do it at compile time and just have a static array
-    //maybe the compiler already does... need to check the asm   
+    ui.end_row(); 
     let normal_bg_color        = ui.style_mut().visuals.widgets.inactive.bg_fill;
     let mut curr_dayhhh_color  = normal_bg_color;
     let mut curr_day_color     = normal_bg_color;
+    let mut selected_color     = normal_bg_color;
     curr_dayhhh_color[1] = curr_dayhhh_color[1].saturating_add(100);
     curr_day_color   [2] = curr_day_color[2].saturating_add(100);
+    selected_color   [1] = selected_color[1].saturating_sub(50);
+    selected_color   [2] = selected_color[2].saturating_add(100);
+    selected_color   [3] = selected_color[3].saturating_sub(50);
     for h in 0..24{
       let is_current_hour = h == curr_hh;
-      let minutes = [":00",":30"];
-      for (is_half_hour,m) in minutes.iter().enumerate() {
-        let is_current_halfhour = is_half_hour == ((curr_mm >= 30) as usize);
+      for m in [0,30] {
+        //@TODO: generalize this to other timescales
+        let is_current_halfhour = (m >= 30) == (curr_mm >= 30);
         
         for day_from_monday in 0..days.len(){
-          let inner_str      = format!("{:0>2}{}",h.to_string(),m);
+          //@SPEED: instead of formatting a string on each frame, we can do it at compile time and just have a static array
+          //maybe the compiler already does... need to check the asm  
+          let inner_str      = format!("{:0>2}:{:0>2}",h.to_string(),m.to_string());
           let is_current_day = (day_from_monday as u32) == curr_day;
           let is_current = is_current_day && is_current_hour && is_current_halfhour;
-          let bgcolor = 
-            if is_current          { curr_dayhhh_color }
-            else if is_current_day { curr_day_color    }
-            else                   { normal_bg_color   }
-          ;//if nothing matches, return normal color
+          let timestamp = (today.date() + chrono::Duration::days(day_from_monday as i64-curr_day as i64)).and_hms(h as u32,m,0).timestamp();
+          let bgcolor = match (app.selected_main_init,app.selected_main_end,is_current,is_current_day){
+            (Some(sel_init),Some(sel_end),_,_) if sel_init <= timestamp && sel_end >= timestamp => {
+              selected_color
+            }
+            (Some(sel_init),None,_,_) if sel_init <= timestamp && (sel_init+60*30) > timestamp => {
+              selected_color
+            }
+            (_,_,true,_) => {
+              curr_dayhhh_color
+            }
+            (_,_,_,true) => {
+              curr_day_color
+            }
+            _ => {
+              normal_bg_color
+            }
+          };//if nothing matches, return normal color
           
           ui.add_full_width_height(|ui|{
             ui.style_mut().visuals.widgets.inactive.bg_fill = bgcolor;
-            ui.add(egui::Button::new(inner_str).wrap(true))
+            ui.style_mut().visuals.widgets.hovered.bg_fill  = bgcolor;
+            if ui.add(egui::Button::new(inner_str).wrap(true)).clicked(){
+              if app.selected_main_init.is_none() || app.selected_main_end.is_some(){
+                app.selected_main_init = Some(timestamp);
+                app.selected_main_end  = None;
+              }
+              else if let Some(sel_init) = app.selected_main_init{
+                app.selected_main_init = Some(timestamp.min(sel_init));
+                app.selected_main_end  = Some(timestamp.max(sel_init));
+              }
+            }
           });
         }
         ui.end_row();
