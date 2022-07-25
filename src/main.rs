@@ -159,8 +159,7 @@ impl eframe::App for CalendarAutomergeApp {
     egui::CentralPanel::default().show(ctx, |ui| {
       let w_width  = ui.available_size().x;
       let w_height = ui.available_size().y;
-      let vpadding = 10.0;
-      let column_size = 2.0*w_width/5.0 - vpadding;
+      let column_size = 3.0*w_width/7.0;
       ui.horizontal(|ui|{
         ui.set_max_height(w_height);//Why do I have to do this
         ui.vertical(|ui|{
@@ -177,30 +176,10 @@ impl eframe::App for CalendarAutomergeApp {
         });
         ui.separator();
         ui.vertical(|ui|{
+          ui.set_height(w_height);
           ui.set_width(column_size);
-          let days = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
-          ui.columns(days.len(),|columns|{
-            for (didx,d) in days.iter().enumerate(){
-              columns[didx].horizontal(|ui|{
-                if didx != 0 { ui.separator_spacing(0.1); }
-                ui.vertical(|ui|{
-                  let v = ui.visuals_mut();
-                  //@TODO none of this shit works?
-                  v.faint_bg_color                 = egui::Color32::RED;
-                  v.extreme_bg_color               = egui::Color32::RED;
-                  v.code_bg_color                  = egui::Color32::RED;
-                  v.widgets.noninteractive.bg_fill = egui::Color32::RED;
-                  v.widgets.inactive.bg_fill       = egui::Color32::RED;
-                  ui.label(*d);
-                  let minutes = ["00","30"];
-                  for h in 0..24{ 
-                    for m in minutes {
-                      ui.label(format!("{}:{}",h.to_string(),m));
-                    }
-                  }
-                });
-              });
-            }
+          egui::ScrollArea::vertical().id_source("Main viewer").show(ui,|ui|{
+            main_viewer_ui(ui,app);
           });
         });
         ui.separator();
@@ -266,6 +245,7 @@ impl eframe::App for CalendarAutomergeApp {
     }
   }
 }
+
 fn appointment_window_ui(ui: &mut egui::Ui,awd: &mut AppointmentWindowData) -> AppointmentWindowResult{
   awd.year  = ui_counter(ui,"Year",awd.year,0,i32::MAX-1,true);
   awd.month = ui_counter(ui,"Month",awd.month,1,12,true);
@@ -387,6 +367,53 @@ fn appointments_list_ui(ui: &mut egui::Ui,app: &mut CalendarAutomergeApp){
   }
 }
 
+fn main_viewer_ui(ui: &mut egui::Ui,_app: &mut CalendarAutomergeApp){
+  let days = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+  let viewer_width = ui.max_rect().size().x;
+  let today = chrono::Local::now();
+  let curr_day = today.weekday().num_days_from_monday();
+  let curr_hhmm = today.time().signed_duration_since(chrono::NaiveTime::from_hms(0,0,0));
+  let curr_hh = curr_hhmm.num_hours();
+  let curr_mm = curr_hhmm.num_minutes() % 60;
+  egui::Grid::new("mainviewer").striped(true).min_col_width(viewer_width/(days.len() as f32)).show(ui,|ui|{
+    for d in days {
+      ui.add_full_width_height(|ui|{ ui.add(egui::Label::new(egui::RichText::new(d).underline()).wrap(true)) });
+    }
+    ui.end_row();
+    //@SPEED: instead of formatting a string on each frame, we can do it at compile time and just have a static array
+    //maybe the compiler already does... need to check the asm   
+    let normal_bg_color        = ui.style_mut().visuals.widgets.inactive.bg_fill;
+    let mut curr_dayhhh_color  = normal_bg_color;
+    let mut curr_day_color     = normal_bg_color;
+    curr_dayhhh_color[1] = curr_dayhhh_color[1].saturating_add(100);
+    curr_day_color   [2] = curr_day_color[2].saturating_add(100);
+    for h in 0..24{
+      let is_current_hour = h == curr_hh;
+      let minutes = [":00",":30"];
+      for (is_half_hour,m) in minutes.iter().enumerate() {
+        let is_current_halfhour = is_half_hour == ((curr_mm >= 30) as usize);
+        
+        for day_from_monday in 0..days.len(){
+          let inner_str      = format!("{:0>2}{}",h.to_string(),m);
+          let is_current_day = (day_from_monday as u32) == curr_day;
+          let is_current = is_current_day && is_current_hour && is_current_halfhour;
+          let bgcolor = 
+            if is_current          { curr_dayhhh_color }
+            else if is_current_day { curr_day_color    }
+            else                   { normal_bg_color   }
+          ;//if nothing matches, return normal color
+          
+          ui.add_full_width_height(|ui|{
+            ui.style_mut().visuals.widgets.inactive.bg_fill = bgcolor;
+            ui.add(egui::Button::new(inner_str).wrap(true))
+          });
+        }
+        ui.end_row();
+      }
+    }
+  });
+}
+
 fn tasks_list_ui(ui: &mut egui::Ui,app: &mut CalendarAutomergeApp){
   ui.heading("Tasks");
   ui.separator();
@@ -453,6 +480,7 @@ fn days_from_month(year: i32,month: u32) -> u32 {
 trait CustomUiShortcuts {
   fn button_enabled(&mut self,enabled: bool,text: impl Into<egui::WidgetText>) -> egui::Response;
   fn separator_spacing(&mut self,spacing: f32) -> egui::Response;
+  fn add_full_width_height<R>(&mut self,ui_func: impl FnOnce(&mut egui::Ui) -> R) -> egui::InnerResponse<R>;
 }
 impl CustomUiShortcuts for egui::Ui {
   fn button_enabled(&mut self,enabled: bool,text: impl Into<egui::WidgetText>) -> egui::Response {
@@ -460,6 +488,9 @@ impl CustomUiShortcuts for egui::Ui {
   }
   fn separator_spacing(&mut self,spacing: f32) -> egui::Response {
     self.add(egui::Separator::default().spacing(spacing))
+  }
+  fn add_full_width_height<R>(&mut self,ui_func: impl FnOnce(&mut egui::Ui) -> R) -> egui::InnerResponse<R> {
+    self.with_layout(egui::Layout::left_to_right().with_main_justify(true).with_cross_justify(true),ui_func)
   }
 }
 
