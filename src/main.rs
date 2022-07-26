@@ -447,10 +447,11 @@ fn main_viewer_ui(ui: &mut egui::Ui,mwd: &mut MainWindowData){
     for (hmstr,h,m) in &mwd.table_body{
       let is_current_hour = i64::from(*h) == curr_hh;
       let is_current_halfhour = (*m >= 30) == (curr_mm >= 30);
-      for day_from_sunday in 0..7 {//leaky abstraction... has to match header in len and in semantics
-        let is_current_day = (day_from_sunday as u32) == curr_day;
+      for (_,date) in &mwd.table_header {
+        let diff_current_day = date.weekday().num_days_from_sunday() as i64 - curr_day as i64;
+        let is_current_day = diff_current_day == 0;
         let is_current = is_current_day && is_current_hour && is_current_halfhour;
-        let timestamp = (today.date() + chrono::Duration::days(day_from_sunday as i64-curr_day as i64)).and_hms(*h,*m,0).timestamp();
+        let timestamp = (today.date() + chrono::Duration::days(diff_current_day)).and_hms(*h,*m,0).timestamp();
         let bgcolor = match (mwd.selected_main_init,mwd.selected_main_end,is_current,is_current_day){
           (Some(sel_init),Some(sel_end),_,_) if sel_init <= timestamp && sel_end >= timestamp => {
             selected_color
