@@ -41,8 +41,7 @@ struct CalendarAutomergeApp {
   pub awd: AppointmentWindowData,
   pub awd_open: bool,
   pub awd_editing_idx: Option<usize>,//Index to appointments
-  pub selected_main_init: Option<i64>,
-  pub selected_main_end: Option<i64>,
+  pub mwd: MainWindowData,
   pub appointments: Vec<Appointment>,
   pub tasks: Vec<Task>,
   pub done_tasks: Vec<Task>,
@@ -69,6 +68,27 @@ struct AppointmentWindowData {
   pub repeat_h:  i64,
   pub repeat_mi: i64,
   pub repeat_s:  i64,
+}
+
+struct MainWindowData{
+  pub selected_main_init: Option<i64>,
+  pub selected_main_end: Option<i64>,
+  //If it changes day, we need to regenerate table_header and table_body
+  pub daytime_generated: Option<chrono::DateTime<chrono::Local>>,
+  pub table_header: [(String,chrono::Date<chrono::Local>);7],//Formatted string and date 
+  pub table_body: [(String,u32,u32);48],//Formatted string and hours and minutes
+}
+
+impl Default for MainWindowData{
+  fn default() -> Self {
+    Self{
+      selected_main_init: None,
+      selected_main_end: None,
+      daytime_generated: None,
+      table_header: [(); 7].map(|_| (String::new(),chrono::Local::now().date())),//date assigned doesn't actually matter, it gets regenerated
+      table_body: [(); 48].map(|_| (String::new(),0,0)),//same
+    }
+  }
 }
 
 enum AppointmentWindowResult {
@@ -153,6 +173,35 @@ impl CalendarAutomergeApp {
   }
 }
 
+impl MainWindowData {
+  fn generate_table(&mut self,daytime: &chrono::DateTime<chrono::Local>) -> (u32,i64,i64){
+    let days = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+    let day = daytime.weekday().num_days_from_sunday();
+    let time_of_day = daytime.time().signed_duration_since(chrono::NaiveTime::from_hms(0,0,0));
+    let hh = time_of_day.num_hours();
+    let mm = time_of_day.num_minutes() % 60;
+    let ret_value = (day,hh,mm);
+    match self.daytime_generated {
+      //If we have generated the table and its the same day, we don't need to regenerate it
+      Some(daytime_generated) if daytime_generated.date() == daytime.date() => {
+        return ret_value;
+      },
+      _ => {},
+    }
+    for (didx,d) in days.iter().enumerate() {
+      let dfull = *daytime + chrono::Duration::days(didx as i64-day as i64);
+      self.table_header[didx] = (format!("{} ({:0>2}/{:0>2})",d,dfull.day().to_string(),dfull.month().to_string()),dfull.date());
+    }
+    for h in 0..24{
+      for (midx,m) in [0,30].iter().enumerate() {//@TODO: generalize this to other timescales
+        self.table_body[h*2+midx] = (format!("{:0>2}:{:0>2}",h.to_string(),m.to_string()),h as u32,*m);
+      }
+    }
+    self.daytime_generated = Some(*daytime);
+    return ret_value;
+  }  
+}
+
 impl eframe::App for CalendarAutomergeApp {
   fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
     let app = self;
@@ -173,8 +222,8 @@ impl eframe::App for CalendarAutomergeApp {
             app.awd_open = true;
           }
           if ui.button("Clear select").clicked(){
-            app.selected_main_init = None;
-            app.selected_main_end  = None;
+            app.mwd.selected_main_init = None;
+            app.mwd.selected_main_end  = None;
           }
           ui.heading("0.0.1 prealpha");
         });
@@ -183,7 +232,7 @@ impl eframe::App for CalendarAutomergeApp {
           ui.set_height(w_height);
           ui.set_width(w_width*0.60);
           egui::ScrollArea::vertical().id_source("Main viewer").show(ui,|ui|{
-            main_viewer_ui(ui,app);
+            main_viewer_ui(ui,&mut app.mwd);
           });
         });
         ui.separator();
@@ -371,28 +420,21 @@ fn appointments_list_ui(ui: &mut egui::Ui,app: &mut CalendarAutomergeApp){
   }
 }
 
-fn main_viewer_ui(ui: &mut egui::Ui,app: &mut CalendarAutomergeApp){
-  let days = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
-  let viewer_width = ui.max_rect().size().x;
+fn main_viewer_ui(ui: &mut egui::Ui,mwd: &mut MainWindowData){
   let today = chrono::Local::now();
-  let curr_day = today.weekday().num_days_from_monday();
-  let curr_hhmm = today.time().signed_duration_since(chrono::NaiveTime::from_hms(0,0,0));
-  let curr_hh = curr_hhmm.num_hours();
-  let curr_mm = curr_hhmm.num_minutes() % 60;
-  /*app.selected_main_init = None;
-  app.selected_main_end  = None;*/
-  egui::Grid::new("mainviewer").striped(true).min_col_width(viewer_width/(days.len() as f32)).show(ui,|ui|{
-    for (didx,d) in days.iter().enumerate() {
-      let dfull = today + chrono::Duration::days(didx as i64-curr_day as i64);
-      let dstr = format!("{} ({:0>2}/{:0>2})",d,dfull.day().to_string(),dfull.month().to_string());
+  let (curr_day,curr_hh,curr_mm) = mwd.generate_table(&today);
+  let viewer_width = ui.max_rect().size().x;
+  egui::Grid::new("mainviewer").striped(true).min_col_width(viewer_width/(mwd.table_header.len() as f32)).show(ui,|ui|{
+    for (dstr,date) in &mwd.table_header {
       ui.add_full_width_height(|ui|{ 
         if ui.add(egui::Button::new(egui::RichText::new(dstr).underline()).wrap(false)).clicked(){
-          app.selected_main_init = Some(dfull.date().and_hms(0,0,0).timestamp());
-          app.selected_main_end  = Some(dfull.date().and_hms(23,59,59).timestamp());
+          mwd.selected_main_init = Some(date.and_hms(0,0,0).timestamp());
+          mwd.selected_main_end  = Some(date.and_hms(23,59,59).timestamp());
         }
       });
     }
-    ui.end_row(); 
+    ui.end_row();
+    //This also could be precalculated... but it doesn't matter its just some sums
     let normal_bg_color        = ui.style_mut().visuals.widgets.inactive.bg_fill;
     let mut curr_dayhhh_color  = normal_bg_color;
     let mut curr_day_color     = normal_bg_color;
@@ -402,54 +444,46 @@ fn main_viewer_ui(ui: &mut egui::Ui,app: &mut CalendarAutomergeApp){
     selected_color   [1] = selected_color[1].saturating_sub(50);
     selected_color   [2] = selected_color[2].saturating_add(100);
     selected_color   [3] = selected_color[3].saturating_sub(50);
-    for h in 0..24{
-      let is_current_hour = h == curr_hh;
-      for m in [0,30] {
-        //@TODO: generalize this to other timescales
-        let is_current_halfhour = (m >= 30) == (curr_mm >= 30);
-        
-        for day_from_monday in 0..days.len(){
-          //@SPEED: instead of formatting a string on each frame, we can do it at compile time and just have a static array
-          //maybe the compiler already does... need to check the asm  
-          let inner_str      = format!("{:0>2}:{:0>2}",h.to_string(),m.to_string());
-          let is_current_day = (day_from_monday as u32) == curr_day;
-          let is_current = is_current_day && is_current_hour && is_current_halfhour;
-          let timestamp = (today.date() + chrono::Duration::days(day_from_monday as i64-curr_day as i64)).and_hms(h as u32,m,0).timestamp();
-          let bgcolor = match (app.selected_main_init,app.selected_main_end,is_current,is_current_day){
-            (Some(sel_init),Some(sel_end),_,_) if sel_init <= timestamp && sel_end >= timestamp => {
-              selected_color
+    for (hmstr,h,m) in &mwd.table_body{
+      let is_current_hour = i64::from(*h) == curr_hh;
+      let is_current_halfhour = (*m >= 30) == (curr_mm >= 30);
+      for day_from_sunday in 0..7 {//leaky abstraction... has to match header in len and in semantics
+        let is_current_day = (day_from_sunday as u32) == curr_day;
+        let is_current = is_current_day && is_current_hour && is_current_halfhour;
+        let timestamp = (today.date() + chrono::Duration::days(day_from_sunday as i64-curr_day as i64)).and_hms(*h,*m,0).timestamp();
+        let bgcolor = match (mwd.selected_main_init,mwd.selected_main_end,is_current,is_current_day){
+          (Some(sel_init),Some(sel_end),_,_) if sel_init <= timestamp && sel_end >= timestamp => {
+            selected_color
+          }
+          (Some(sel_init),None,_,_) if sel_init <= timestamp && (sel_init+60*30) > timestamp => {
+            selected_color
+          }
+          (_,_,true,_) => {
+            curr_dayhhh_color
+          }
+          (_,_,_,true) => {
+            curr_day_color
+          }
+          _ => {
+            normal_bg_color
+          }
+        };
+        ui.add_full_width_height(|ui|{
+          ui.style_mut().visuals.widgets.inactive.bg_fill = bgcolor;
+          ui.style_mut().visuals.widgets.hovered.bg_fill  = bgcolor;
+          if ui.add(egui::Button::new(hmstr).wrap(true)).clicked(){
+            if mwd.selected_main_init.is_none() || mwd.selected_main_end.is_some(){
+              mwd.selected_main_init = Some(timestamp);
+              mwd.selected_main_end  = None;
             }
-            (Some(sel_init),None,_,_) if sel_init <= timestamp && (sel_init+60*30) > timestamp => {
-              selected_color
+            else if let Some(sel_init) = mwd.selected_main_init{
+              mwd.selected_main_init = Some(timestamp.min(sel_init));
+              mwd.selected_main_end  = Some(timestamp.max(sel_init));
             }
-            (_,_,true,_) => {
-              curr_dayhhh_color
-            }
-            (_,_,_,true) => {
-              curr_day_color
-            }
-            _ => {
-              normal_bg_color
-            }
-          };//if nothing matches, return normal color
-          
-          ui.add_full_width_height(|ui|{
-            ui.style_mut().visuals.widgets.inactive.bg_fill = bgcolor;
-            ui.style_mut().visuals.widgets.hovered.bg_fill  = bgcolor;
-            if ui.add(egui::Button::new(inner_str).wrap(true)).clicked(){
-              if app.selected_main_init.is_none() || app.selected_main_end.is_some(){
-                app.selected_main_init = Some(timestamp);
-                app.selected_main_end  = None;
-              }
-              else if let Some(sel_init) = app.selected_main_init{
-                app.selected_main_init = Some(timestamp.min(sel_init));
-                app.selected_main_end  = Some(timestamp.max(sel_init));
-              }
-            }
-          });
-        }
-        ui.end_row();
+          }
+        });
       }
+      ui.end_row();
     }
   });
 }
