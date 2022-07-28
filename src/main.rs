@@ -49,6 +49,7 @@ struct CalendarAutomergeApp {
 
 #[derive(Default)]
 struct AppointmentWindowData {
+  pub title: String,
   pub month: u32,
   pub year: i32,
   pub selected_y: i32,
@@ -100,6 +101,7 @@ enum AppointmentWindowResult {
 
 #[derive(Default)]
 struct Appointment {
+  pub title: String,
   pub init: i64,//Timestamp
   pub end: i64,//Timestamp
   pub text: String,
@@ -124,6 +126,7 @@ impl CalendarAutomergeApp {
     
     let init: i64;
     let end: i64;
+    let title: String;
     let text: String;
     let repeat_period: RepeatPeriod;
     
@@ -131,6 +134,7 @@ impl CalendarAutomergeApp {
       None => {
         init  = Local::now().timestamp();
         end   = init + 1*60*60;
+        title = String::new();
         text  = String::new();
         repeat_period = RepeatPeriod::default();
       }
@@ -138,12 +142,14 @@ impl CalendarAutomergeApp {
         if is_task {
           init  = self.tasks[idx].task.init;
           end   = self.tasks[idx].task.end;
+          title = String::from(self.tasks[idx].task.title.as_str());
           text  = String::from(self.tasks[idx].task.text.as_str());
           repeat_period = self.tasks[idx].repeat_period;
         }
         else{
           init  = self.appointments[idx].init;
           end   = self.appointments[idx].end;
+          title = String::from(self.appointments[idx].title.as_str());
           text  = String::from(self.appointments[idx].text.as_str());
           repeat_period = RepeatPeriod::default();
         }
@@ -152,6 +158,7 @@ impl CalendarAutomergeApp {
   
     let date = chrono::NaiveDateTime::from_timestamp(init,0);
     let awd = &mut self.awd;//alias
+    awd.title  = title;
     awd.text   = text;
     awd.month  = date.month();
     awd.year   = date.year();
@@ -300,6 +307,11 @@ impl eframe::App for CalendarAutomergeApp {
 }
 
 fn appointment_window_ui(ui: &mut egui::Ui,awd: &mut AppointmentWindowData) -> AppointmentWindowResult{
+  ui.horizontal(|ui|{
+    ui.label("Title");
+    ui.text_edit_singleline(&mut awd.title);
+  });
+  
   awd.year  = ui_counter(ui,"Year",awd.year,0,i32::MAX-1,true);
   awd.month = ui_counter(ui,"Month",awd.month,1,12,true);
   ui.heading(format!("Selected {:0>4}-{:0>2}-{:0>2}",
@@ -363,14 +375,15 @@ fn appointment_window_ui(ui: &mut egui::Ui,awd: &mut AppointmentWindowData) -> A
   let mut result = AppointmentWindowResult::Open;
   ui.horizontal(|ui|{
     if ui.button("Save").clicked(){
+      let title = String::from(awd.title.as_str());
       let init = chrono::Utc.ymd(
         awd.selected_y,
         awd.selected_m,
         awd.selected_d
       ).and_hms_milli(awd.hour,awd.minute,0,0).timestamp();
       let end  = init + ((awd.d_minute + awd.d_hour * 60) * 60) as i64;
-      let text = String::from(awd.text.as_str()); 
-      let appointment = Appointment{init: init,end: end,text: text};
+      let text = String::from(awd.text.as_str());
+      let appointment = Appointment{title: title,init: init,end: end,text: text};
       result = if awd.is_task {
         let repeat_period = RepeatPeriod::new(
           awd.repeat_y,awd.repeat_mo,
@@ -397,10 +410,11 @@ fn appointments_list_ui(ui: &mut egui::Ui,app: &mut CalendarAutomergeApp){
   let mut for_deletion = Vec::<usize>::with_capacity(app.appointments.len());
   let mut edit_appointment: Option<usize> = None;
   for (idx,a) in app.appointments.iter_mut().enumerate(){
-    let init_appointment = chrono::NaiveDateTime::from_timestamp(a.init,0);//@SPEED Save this to avoid recreating in each frame
-    let end_appointment = chrono::NaiveDateTime::from_timestamp(a.end,0);
+    let init = chrono::NaiveDateTime::from_timestamp(a.init,0).to_string();//@SPEED Save this to avoid recreating in each frame
+    let end = chrono::NaiveDateTime::from_timestamp(a.end,0).to_string();
+    let lbl = format!("{} | {}-{}",a.title,init,end);
     ui.horizontal_wrapped(|ui|{
-      ui.add(egui::Label::new(init_appointment.to_string()+" - "+&end_appointment.to_string()).wrap(true));
+      ui.add(egui::Label::new(lbl).wrap(true));
       if ui.button_enabled(!app.awd_open,"Edit").clicked(){
         edit_appointment = Some(idx);
       }
@@ -495,10 +509,14 @@ fn tasks_list_ui(ui: &mut egui::Ui,app: &mut CalendarAutomergeApp){
   let mut for_deletion = Vec::<usize>::with_capacity(app.tasks.len());
   let mut edit_task: Option<usize> = None;
   for (idx,t) in app.tasks.iter_mut().enumerate(){
-    let init = chrono::NaiveDateTime::from_timestamp(t.task.init.max(i32::MIN as i64).min(i32::MAX as i64),0);//@SPEED Save this to avoid recreating in each frame
-    let end  = chrono::NaiveDateTime::from_timestamp(t.task.end.max(i32::MIN as i64).min(i32::MAX as i64),0);
+    let init = chrono::NaiveDateTime::from_timestamp(t.task.init.max(i32::MIN as i64).min(i32::MAX as i64),0).to_string();//@SPEED Save this to avoid recreating in each frame
+    let end  = chrono::NaiveDateTime::from_timestamp(t.task.end.max(i32::MIN as i64).min(i32::MAX as i64),0).to_string();
+    let lbl = format!("{} | {}-{}",t.task.title,init.to_string(),end.to_string());
     ui.horizontal_wrapped(|ui|{
-      ui.add(egui::Label::new(init.to_string()+" - "+&end.to_string()+" - "+&t.repeat_period.to_string()).wrap(true));
+      ui.vertical(|ui|{          
+        ui.add(egui::Label::new(lbl).wrap(true));
+        ui.add(egui::Label::new(t.repeat_period.to_string()).wrap(true));
+      });
       if ui.button_enabled(!app.awd_open,"Edit").clicked(){
         edit_task = Some(idx);
       }
